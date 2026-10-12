@@ -15,6 +15,9 @@ from googleapiclient.http import MediaFileUpload
 import json
 import requests
 
+import argparse
+from urllib.parse import quote
+
 import torch
 from torchvision import transforms
 from transformers import AutoModelForImageSegmentation
@@ -144,6 +147,20 @@ def with_retry(func, *args, retries=6, base_delay=3, **kwargs):
 # ============================================================
 # HELPERS
 # ============================================================
+REPO_RAW_BASE = 'https://raw.githubusercontent.com/expediansunited-coder/galaksia-match-day/main'
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument('--generate-only', action='store_true')
+    p.add_argument('--post-only', action='store_true')
+    return p.parse_args()
+
+
+def github_raw_url(path):
+    p = path.replace('\\', '/')
+    return f'{REPO_RAW_BASE}/{quote(p)}'
+
 def _norm(s):
     if not s:
         return ''
@@ -948,6 +965,7 @@ def build_matchday_caption(team, opp_name, we_are_home, kickoff_txt, location_tx
 # RUN
 # ============================================================
 def run():
+    args = parse_args()
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     client = get_gspread_client()
@@ -1009,6 +1027,43 @@ def run():
 
             chosen, photo = pick_player_with_photo(drive, players, list(reversed(recent)))
 
+            if args.post_only:
+                safe_team = safe_filename(team)
+                out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{today_str}.png')
+                story_out = out.replace('.png', '_story.png')
+
+                if not os.path.exists(out):
+                    print(f'{team} row {i}: missing {out}, cannot post')
+                    continue
+
+                if not os.path.exists(story_out):
+                    print(f'{team} row {i}: missing {story_out}, cannot post story')
+                    continue
+
+                caption = build_matchday_caption(
+                    team=team,
+                    opp_name=opp,
+                    we_are_home=we_are_home,
+                    kickoff_txt=kickoff,
+                    location_txt=location,
+                    round_txt=round_txt
+                )
+
+                feed_url = github_raw_url(out)
+                story_url = github_raw_url(story_out)
+
+                post_to_meta(
+                    out,
+                    caption,
+                    image_url=feed_url,
+                    story_url=story_url
+                )
+
+                ws.update_cell(i, COL_STATUS + 1, 'Posted')
+                print(f'{team} row {i}: status = Posted')
+                generated += 1
+                continue
+            
             img = build_matchday_image(
                 team=team,
                 opp_name=opp,
@@ -1030,6 +1085,9 @@ def run():
 
             print(f'{team} row {i}: saved {out}')
 
+            if args.generate_only:
+                continue
+
             if POST_TO_META_ONLINE:
                 try:
                     caption = build_matchday_caption(
@@ -1041,8 +1099,8 @@ def run():
                         round_txt=round_txt
                     )
 
-                    feed_url, _ = upload_public_image(drive, out)
-                    story_url, _ = upload_public_image(drive, story_out)
+                    feed_url = github_raw_url(out)
+                    story_url = github_raw_url(story_out)
 
                     print(f'{team} row {i}: feed url: {feed_url}')
                     print(f'{team} row {i}: story url: {story_url}')
