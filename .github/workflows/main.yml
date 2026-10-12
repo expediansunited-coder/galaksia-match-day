@@ -1,0 +1,59 @@
+name: Daily Matchday 11s Post
+
+on:
+  schedule:
+    - cron: '07 7 * * *'   # 09:07 Prague summer / 08:07 Prague winter
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-birefnet-${{ runner.os }}-v1
+
+      - name: Install CPU PyTorch
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write secret files
+        run: |
+          echo '${{ secrets.CREDENTIALS_JSON }}' > credentials.json
+          echo '${{ secrets.META_CONFIG_JSON }}' > meta_config.json
+
+      - name: Run matchday script
+        run: python matchday.py
+
+      - name: Upload generated images as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchday-output
+          path: output/*.png
+          if-no-files-found: ignore
