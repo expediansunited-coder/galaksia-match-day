@@ -10,7 +10,6 @@ import gspread
 from gspread.exceptions import APIError
 from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
 import json
 import requests
@@ -43,7 +42,6 @@ ASSETS_FOLDER_ID = '1-MAJwpIAjQvzXQdsPdqmkX4NGrM8YFt5'
 LOGO_FOLDER_ID = '19NNyf1trl1LoA7Tth7PFMbRAv65oXeeR'
 PLAYERS_ROOT_FOLDER_ID = '1ul10SG2lD5vOjwR0hpQPPb6FqLWFcc3N'
 
-POST_UPLOAD_FOLDER_ID = '1-MAJwpIAjQvzXQdsPdqmkX4NGrM8YFt5'
 POST_TO_META_ONLINE = True
 
 OUTPUT_DIR = 'output'
@@ -156,10 +154,13 @@ def parse_args():
     p.add_argument('--post-only', action='store_true')
     return p.parse_args()
 
-
 def github_raw_url(path):
     p = path.replace('\\', '/')
     return f'{REPO_RAW_BASE}/{quote(p)}'
+
+def safe_filename(s):
+    s = str(s or '').strip()
+    return re.sub(r'[^A-Za-z0-9]+', '_', s).strip('_') or 'file'
 
 def _norm(s):
     if not s:
@@ -740,43 +741,6 @@ def load_meta_config():
     with open('meta_config.json') as f:
         return json.load(f)
 
-
-def upload_public_image(drive, image_path, folder_id=POST_UPLOAD_FOLDER_ID):
-    last_err = None
-    file_name = os.path.basename(image_path)
-
-    file_metadata = {
-        'name': file_name,
-        'parents': [folder_id]
-    }
-
-    media = MediaFileUpload(image_path, mimetype='image/png', resumable=True)
-
-    for attempt in range(4):
-        try:
-            file = drive.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id, webViewLink, webContentLink'
-            ).execute()
-
-            file_id = file.get('id')
-
-            drive.permissions().create(
-                fileId=file_id,
-                body={'type': 'anyone', 'role': 'reader'}
-            ).execute()
-
-            public_url = file.get('webContentLink') or file.get('webViewLink')
-            return public_url, file_id
-
-        except Exception as e:
-            last_err = str(e)
-            time.sleep(5 * (attempt + 1))
-
-    raise RuntimeError('Google Drive image upload failed after retries: %s' % last_err)
-
-
 def _fb_page_photo(page_id, token, image_url, caption, published=True):
     r = requests.post(
         '%s/%s/photos' % (GRAPH, page_id),
@@ -1007,29 +971,9 @@ def run():
                 print(f'{team} row {i}: no fixture found.')
                 continue
 
-            if team not in bg_cache:
-                bg_cache[team] = download_image_by_name(drive, MD_BACKGROUND_NAME_FOR_TEAM[team])
-
-            bg = bg_cache[team]
-            if bg is None:
-                print(f'{team} row {i}: background missing.')
-                continue
-
-            recent = []
-            for r in range(i - 2, 0, -1):
-                prev = data[r - 1]
-                if len(prev) > COL_MD_PICTURE:
-                    v = prev[COL_MD_PICTURE].strip()
-                    if v:
-                        recent.append(v)
-                if len(recent) >= RECENT_ROWS:
-                    break
-
-            chosen, photo = pick_player_with_photo(drive, players, list(reversed(recent)))
-
             if args.post_only:
                 safe_team = safe_filename(team)
-                out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{today_str}.png')
+                out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{date_str}.png')
                 story_out = out.replace('.png', '_story.png')
 
                 if not os.path.exists(out):
@@ -1063,7 +1007,27 @@ def run():
                 print(f'{team} row {i}: status = Posted')
                 generated += 1
                 continue
-            
+
+            if team not in bg_cache:
+                bg_cache[team] = download_image_by_name(drive, MD_BACKGROUND_NAME_FOR_TEAM[team])
+
+            bg = bg_cache[team]
+            if bg is None:
+                print(f'{team} row {i}: background missing.')
+                continue
+
+            recent = []
+            for r in range(i - 2, 0, -1):
+                prev = data[r - 1]
+                if len(prev) > COL_MD_PICTURE:
+                    v = prev[COL_MD_PICTURE].strip()
+                    if v:
+                        recent.append(v)
+                if len(recent) >= RECENT_ROWS:
+                    break
+
+            chosen, photo = pick_player_with_photo(drive, players, list(reversed(recent)))
+         
             img = build_matchday_image(
                 team=team,
                 opp_name=opp,
@@ -1077,7 +1041,7 @@ def run():
                 logo_files=logo_files
             )
 
-            safe_team = re.sub(r'[^A-Za-z0-9]+', '_', team)
+            safe_team = safe_filename(team)
             out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{date_str}.png')
 
             img.save(out, 'PNG')
@@ -1085,7 +1049,12 @@ def run():
 
             print(f'{team} row {i}: saved {out}')
 
+            if chosen:
+                ws.update_cell(i, COL_MD_PICTURE + 1, chosen)
+                print(f'{team} row {i}: MD picture = {chosen}')
+
             if args.generate_only:
+                generated += 1
                 continue
 
             if POST_TO_META_ONLINE:
@@ -1117,10 +1086,6 @@ def run():
 
                 except Exception as e:
                     print(f'{team} row {i}: posting failed: {e}')
-
-            if chosen:
-                ws.update_cell(i, COL_MD_PICTURE + 1, chosen)
-                print(f'{team} row {i}: MD picture = {chosen}')
 
             generated += 1
 
