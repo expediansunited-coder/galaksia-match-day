@@ -207,7 +207,7 @@ def clean_team_name(name):
     s = (name or '').strip()
 
     s = re.sub(r'["“”„‟]+([A-ZÁ-Ž])["“”„‟]+', r'\1', s)
-    s = re.sub(r'\b(z\.?\s*s\.?|s\.?\s*r\.?\s*o\.?|a\.?\s*s\.?|o\.?\s*s\.?)\b\.?', '', s, flags=re.I)
+    s = re.sub(r'\b(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?\b', '', s, flags=re.I)
 
     s = re.sub(r'\s+', ' ', s)
     s = re.sub(r'\s*,\s*$', '', s)
@@ -684,8 +684,16 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
     home = team if we_are_home else opp_name
     away = opp_name if we_are_home else team
 
+    def center_y(text, font, cy, fill=WHITE):
+        b = draw.textbbox((0, 0), text, font=font)
+        w = b[2] - b[0]
+        h = b[3] - b[1]
+        x = int(TEXT_CX - w / 2 - b[0])
+        y = int(cy - h / 2 - b[1])
+        draw.text((x, y), text, font=font, fill=fill)
+
     def resolve_logo(name):
-        is_us = _norm(name) in ('11a', '11b', '11c') or 'galaksia' in name.lower()
+        is_us = is_our_team_name(name)
 
         lf = find_logo_file(
             logo_files,
@@ -703,16 +711,16 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
         cb = img.getbbox()
         return img.crop(cb) if cb else img
 
+    def paste_logo(logo, cx):
+        if logo is None:
+            return
+        l = logo.copy()
+        scale = LOGO_MAX / max(l.width, l.height)
+        l = l.resize((max(1, int(l.width * scale)), max(1, int(l.height * scale))), Image.LANCZOS)
+        bg.alpha_composite(l, (int(cx - l.width / 2), int(LOGOS_Y - l.height / 2)))
+
     home_logo = resolve_logo(home)
     away_logo = resolve_logo(away)
-
-def center_y(text, font, cy, fill=WHITE):
-        b = draw.textbbox((0, 0), text, font=font)
-        w = b[2] - b[0]
-        h = b[3] - b[1]
-        x = int(TEXT_CX - w / 2 - b[0])
-        y = int(cy - h / 2 - b[1])
-        draw.text((x, y), text, font=font, fill=fill)
 
     home_full = display_team_for_line(clean_team_name(home))
     away_full = display_team_for_line(clean_team_name(away))
@@ -764,14 +772,18 @@ def center_y(text, font, cy, fill=WHITE):
         (away_full, a_font, WHITE)
     ], TEAM_BLOCK_CY)
 
+    paste_logo(home_logo, HOME_LOGO_CX)
+    paste_logo(away_logo, AWAY_LOGO_CX)
+
     sep_time = f' | {kickoff_txt}'
     time_w = text_width(draw, sep_time, info_font)
+    max_loc_w = max(1, INFO_TEXT_MAX_W - time_w)
 
     loc_font, loc_text = fit_text_font(
         draw,
         location_txt,
         INFO_SIZE,
-        INFO_TEXT_MAX_W - time_w,
+        max_loc_w,
         min_size=18
     )
 
@@ -786,7 +798,6 @@ def center_y(text, font, cy, fill=WHITE):
             rt = 'ROUND ' + rt
         center_y(rt, round_font, ROUND_Y, GREEN)
 
-    # Player
     if player_photo is not None:
         ph = player_photo.copy()
         cb = ph.info.get('content_bbox', (0, 0, ph.width, ph.height))
@@ -1132,7 +1143,7 @@ def run():
             )
 
             safe_team = safe_filename(team)
-            out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{date_str}.png')
+            out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{date_str}_row{i}.png')
 
             img.save(out, 'PNG')
             story_out = make_story_version(out)
