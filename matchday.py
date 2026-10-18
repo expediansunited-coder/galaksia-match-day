@@ -82,8 +82,10 @@ GREEN = (0, 210, 160)
 MD_W = 768
 MD_H = 960
 
-# Layout copied approximately from your sample
-TEXT_CX = int(MD_W * 0.70)
+RIGHT_BLOCK_LEFT = int(MD_W * 0.40)
+RIGHT_BLOCK_RIGHT = MD_W - 18
+RIGHT_BLOCK_MAX_W = RIGHT_BLOCK_RIGHT - RIGHT_BLOCK_LEFT
+TEXT_CX = int((RIGHT_BLOCK_LEFT + RIGHT_BLOCK_RIGHT) / 2)
 
 TEAM_BLOCK_CY = int(MD_H * 0.550)
 
@@ -94,7 +96,8 @@ INFO_Y = LOGOS_Y + VERT_GAP
 ROUND_Y = int(MD_H * 0.850)
 
 TEAM_LINE_GAP = 8
-TEAM_TEXT_MAX_W = int(MD_W * 0.54)
+TEAM_TEXT_MAX_W = RIGHT_BLOCK_MAX_W
+INFO_TEXT_MAX_W = RIGHT_BLOCK_MAX_W
 
 TEAM_SIZE = 42
 INFO_SIZE = 29
@@ -202,7 +205,14 @@ def load_font(size):
 
 def clean_team_name(name):
     s = (name or '').strip()
-    return re.sub(r'\s*,?\s*(z\.s\.|a\.s\.)\s*$', '', s, flags=re.I).strip()
+
+    s = re.sub(r'["“”„‟]+([A-ZÁ-Ž])["“”„‟]+', r'\1', s)
+    s = re.sub(r'\b(z\.?\s*s\.?|s\.?\s*r\.?\s*o\.?|a\.?\s*s\.?|o\.?\s*s\.?)\b\.?', '', s, flags=re.I)
+
+    s = re.sub(r'\s+', ' ', s)
+    s = re.sub(r'\s*,\s*$', '', s)
+
+    return s.strip()
 
 
 def our_display(team):
@@ -238,6 +248,57 @@ def split_team_name_if_needed(name):
 
     return ' '.join(toks), ''
 
+def is_our_team_name(name):
+    n = (name or '').strip()
+    return _norm(n) in ('11a', '11b', '11c') or 'galaksia' in n.lower()
+
+
+def text_width(draw, text, font):
+    b = draw.textbbox((0, 0), text, font=font)
+    return b[2] - b[0]
+
+
+def text_height(draw, text, font):
+    b = draw.textbbox((0, 0), text, font=font)
+    return b[3] - b[1]
+
+
+def ellipsize_to_width(draw, text, font, max_w):
+    text = str(text or '')
+    if text_width(draw, text, font) <= max_w:
+        return text
+
+    ell = '…'
+    while text and text_width(draw, text + ell, font) > max_w:
+        text = text[:-1].rstrip()
+
+    return text + ell if text else ell
+
+
+def draw_centered_segments(draw, segments, cy):
+    total_w = sum(text_width(draw, txt, font) for txt, font, fill in segments)
+    max_h = max(text_height(draw, txt, font) for txt, font, fill in segments)
+
+    x = TEXT_CX - total_w / 2
+
+    for txt, font, fill in segments:
+        b = draw.textbbox((0, 0), txt, font=font)
+        y = cy - max_h / 2 - b[1]
+        draw.text((int(x - b[0]), int(y)), txt, font=font, fill=fill)
+        x += b[2] - b[0]
+
+
+def fit_text_font(draw, text, start_size, max_w, min_size=18):
+    size = start_size
+
+    while size > min_size:
+        font = load_font(size)
+        if text_width(draw, text, font) <= max_w:
+            return font, text
+        size -= 1
+
+    font = load_font(min_size)
+    return font, ellipsize_to_width(draw, text, font, max_w)
 
 # ============================================================
 # DRIVE
@@ -536,8 +597,10 @@ def pick_player_with_photo(drive, players, recent_names):
 # ============================================================
 # FIXTURES
 # ============================================================
-def find_opponent(client, team, match_date):
+def find_opponent(client, team, match_date, occurrence=1):
     ss = with_retry(client.open_by_key, INDEX_SHEET_ID)
+
+    found = 0
 
     for tab in (FIXTURES_FRIENDLY_TAB, FIXTURES_LEAGUECUP_TAB):
         try:
@@ -554,18 +617,22 @@ def find_opponent(client, team, match_date):
             if parse_date(row[FIX_COL_DATE]) != match_date:
                 continue
 
-            home = row[FIX_COL_HOME].strip()
-            away = row[FIX_COL_AWAY].strip()
+            home = clean_team_name(row[FIX_COL_HOME].strip())
+            away = clean_team_name(row[FIX_COL_AWAY].strip())
             kickoff = row[FIX_COL_TIME].strip()
             location = row[FIX_COL_LOCATION].strip()
             match_type = row[FIX_COL_MTYPE].strip()
             round_txt = row[FIX_COL_ROUND].strip()
 
             if home.upper() == team.upper():
-                return away, match_type, kickoff, location, True, round_txt
+                found += 1
+                if found == occurrence:
+                    return away, match_type, kickoff, location, True, round_txt
 
             if away.upper() == team.upper():
-                return home, match_type, kickoff, location, False, round_txt
+                found += 1
+                if found == occurrence:
+                    return home, match_type, kickoff, location, False, round_txt
 
     return None, None, None, None, None, None
 
@@ -639,8 +706,7 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
     home_logo = resolve_logo(home)
     away_logo = resolve_logo(away)
 
-    # Team names, wrapped only when too wide
-    def center_y(text, font, cy, fill=WHITE):
+def center_y(text, font, cy, fill=WHITE):
         b = draw.textbbox((0, 0), text, font=font)
         w = b[2] - b[0]
         h = b[3] - b[1]
@@ -648,57 +714,71 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
         y = int(cy - h / 2 - b[1])
         draw.text((x, y), text, font=font, fill=fill)
 
-    def text_w(text, font):
-        b = draw.textbbox((0, 0), text, font=font)
-        return b[2] - b[0]
+    home_full = display_team_for_line(clean_team_name(home))
+    away_full = display_team_for_line(clean_team_name(away))
 
-    home_full = display_team_for_line(home)
-    away_full = display_team_for_line(away)
+    home_is_us = is_our_team_name(home)
+    away_is_us = is_our_team_name(away)
 
-    full_line = f'{home_full}  VS  {away_full}'
+    gp_font = team_font
+    vs_font = team_font
 
-    if text_w(full_line, team_font) <= TEAM_TEXT_MAX_W:
-        line1 = full_line
-        line2 = ''
-    else:
-        if home == opp_name:
-            home_main, home_extra = split_team_name_if_needed(opp_name)
-        else:
-            home_main, home_extra = home_full, ''
+    other_size = TEAM_SIZE
+    while other_size > 18:
+        other_font = load_font(other_size)
 
-        if away == opp_name:
-            away_main, away_extra = split_team_name_if_needed(opp_name)
-        else:
-            away_main, away_extra = away_full, ''
+        h_font = gp_font if home_is_us else other_font
+        a_font = gp_font if away_is_us else other_font
 
-        line1 = f'{home_main}  VS  {away_main}'
-        line2 = ' '.join(x for x in (home_extra, away_extra) if x)
+        segments = [
+            (home_full, h_font, WHITE),
+            ('  VS  ', vs_font, WHITE),
+            (away_full, a_font, WHITE)
+        ]
 
-    if line2:
-        b1 = draw.textbbox((0, 0), line1, font=team_font)
-        b2 = draw.textbbox((0, 0), line2, font=team_font)
+        total_w = sum(text_width(draw, txt, font) for txt, font, fill in segments)
 
-        h1 = b1[3] - b1[1]
-        h2 = b2[3] - b2[1]
-        total_h = h1 + TEAM_LINE_GAP + h2
+        if total_w <= TEAM_TEXT_MAX_W:
+            break
 
-        center_y(line1, team_font, TEAM_BLOCK_CY - total_h / 2 + h1 / 2)
-        center_y(line2, team_font, TEAM_BLOCK_CY + total_h / 2 - h2 / 2)
-    else:
-        center_y(line1, team_font, TEAM_BLOCK_CY)
+        other_size -= 1
 
-    def paste_logo(logo, cx):
-        if logo is None:
-            return
-        l = logo.copy()
-        scale = LOGO_MAX / max(l.width, l.height)
-        l = l.resize((max(1, int(l.width * scale)), max(1, int(l.height * scale))), Image.LANCZOS)
-        bg.alpha_composite(l, (int(cx - l.width / 2), int(LOGOS_Y - l.height / 2)))
+    other_font = load_font(other_size)
 
-    paste_logo(home_logo, HOME_LOGO_CX)
-    paste_logo(away_logo, AWAY_LOGO_CX)
+    h_font = gp_font if home_is_us else other_font
+    a_font = gp_font if away_is_us else other_font
 
-    center_y(f'{location_txt} | {kickoff_txt}', info_font, INFO_Y)
+    fixed_w = text_width(draw, '  VS  ', vs_font)
+
+    if home_is_us and not away_is_us:
+        max_away_w = TEAM_TEXT_MAX_W - text_width(draw, home_full, h_font) - fixed_w
+        away_full = ellipsize_to_width(draw, away_full, a_font, max_away_w)
+
+    if away_is_us and not home_is_us:
+        max_home_w = TEAM_TEXT_MAX_W - text_width(draw, away_full, a_font) - fixed_w
+        home_full = ellipsize_to_width(draw, home_full, h_font, max_home_w)
+
+    draw_centered_segments(draw, [
+        (home_full, h_font, WHITE),
+        ('  VS  ', vs_font, WHITE),
+        (away_full, a_font, WHITE)
+    ], TEAM_BLOCK_CY)
+
+    sep_time = f' | {kickoff_txt}'
+    time_w = text_width(draw, sep_time, info_font)
+
+    loc_font, loc_text = fit_text_font(
+        draw,
+        location_txt,
+        INFO_SIZE,
+        INFO_TEXT_MAX_W - time_w,
+        min_size=18
+    )
+
+    draw_centered_segments(draw, [
+        (loc_text, loc_font, WHITE),
+        (sep_time, info_font, WHITE)
+    ], INFO_Y)
 
     if round_txt:
         rt = round_txt.upper()
@@ -945,6 +1025,7 @@ def run():
 
     bg_cache = {}
     generated = 0
+    fixture_seen = {}
 
     for ws in tabs:
         team = ws.title.strip().upper()
@@ -957,6 +1038,10 @@ def run():
             if match_date != today:
                 continue
 
+            fixture_key = (team, match_date.isoformat())
+            fixture_seen[fixture_key] = fixture_seen.get(fixture_key, 0) + 1
+            occurrence = fixture_seen[fixture_key]
+
             if status:
                 print(f'{team} row {i}: already sent, skipping.')
                 continue
@@ -965,7 +1050,12 @@ def run():
             subs = split_names(row[COL_SUBS]) if len(row) > COL_SUBS else []
             players = starters + subs
 
-            opp, match_type, kickoff, location, we_are_home, round_txt = find_opponent(client, team, match_date)
+            opp, match_type, kickoff, location, we_are_home, round_txt = find_opponent(
+                client,
+                team,
+                match_date,
+                occurrence=occurrence
+            )
 
             if not opp:
                 print(f'{team} row {i}: no fixture found.')
@@ -973,7 +1063,7 @@ def run():
 
             if args.post_only:
                 safe_team = safe_filename(team)
-                out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{date_str}.png')
+                out = os.path.join(OUTPUT_DIR, f'matchday_{safe_team}_{date_str}_row{i}.png')
                 story_out = out.replace('.png', '_story.png')
 
                 if not os.path.exists(out):
