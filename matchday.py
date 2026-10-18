@@ -77,12 +77,11 @@ FIX_COL_ROUND = 6
 RECENT_ROWS = 6
 
 WHITE = (255, 255, 255)
-GREEN = (0, 210, 160)
 
 MD_W = 768
 MD_H = 960
 
-RIGHT_BLOCK_LEFT = int(MD_W * 0.40)
+RIGHT_BLOCK_LEFT = int(MD_W * 0.50)
 RIGHT_BLOCK_RIGHT = MD_W - 18
 RIGHT_BLOCK_MAX_W = RIGHT_BLOCK_RIGHT - RIGHT_BLOCK_LEFT
 TEXT_CX = int((RIGHT_BLOCK_LEFT + RIGHT_BLOCK_RIGHT) / 2)
@@ -92,8 +91,7 @@ TEAM_BLOCK_CY = int(MD_H * 0.550)
 VERT_GAP = int(MD_H * 0.145)
 
 LOGOS_Y = TEAM_BLOCK_CY + VERT_GAP
-INFO_Y = LOGOS_Y + VERT_GAP
-ROUND_Y = int(MD_H * 0.850)
+INFO_Y = LOGOS_Y + int(MD_H * 0.125)
 
 TEAM_LINE_GAP = 8
 TEAM_TEXT_MAX_W = RIGHT_BLOCK_MAX_W
@@ -101,7 +99,6 @@ INFO_TEXT_MAX_W = RIGHT_BLOCK_MAX_W
 
 TEAM_SIZE = 42
 INFO_SIZE = 29
-ROUND_SIZE = 19
 
 LOGO_MAX = 150
 HOME_LOGO_CX = int(MD_W * 0.58)
@@ -679,7 +676,6 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
 
     team_font = load_font(TEAM_SIZE)
     info_font = load_font(INFO_SIZE)
-    round_font = load_font(ROUND_SIZE)
 
     home = team if we_are_home else opp_name
     away = opp_name if we_are_home else team
@@ -791,12 +787,6 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
         (loc_text, loc_font, WHITE),
         (sep_time, info_font, WHITE)
     ], INFO_Y)
-
-    if round_txt:
-        rt = round_txt.upper()
-        if not rt.startswith('ROUND'):
-            rt = 'ROUND ' + rt
-        center_y(rt, round_font, ROUND_Y, GREEN)
 
     if player_photo is not None:
         ph = player_photo.copy()
