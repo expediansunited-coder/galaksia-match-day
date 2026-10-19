@@ -2,7 +2,7 @@ name: Daily Matchday 11s Post
 
 on:
   schedule:
-    - cron: '07 7 * * *'
+    - cron: '07 1 * * *'
   workflow_dispatch:
 
 permissions:
