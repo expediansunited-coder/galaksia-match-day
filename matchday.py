@@ -286,6 +286,36 @@ def draw_centered_segments(draw, segments, cy):
         draw.text((int(x - b[0]), int(y)), txt, font=font, fill=fill)
         x += b[2] - b[0]
 
+def draw_axis_centered_segments(draw, left_text, left_font, sep_text, sep_font, right_text, right_font, cy, gap=12):
+    """
+    Draws:
+        left_text   sep_text   right_text
+
+    with sep_text centered exactly on TEXT_CX.
+    """
+    max_h = max(
+        text_height(draw, left_text, left_font),
+        text_height(draw, sep_text, sep_font),
+        text_height(draw, right_text, right_font)
+    )
+
+    sep_w = text_width(draw, sep_text, sep_font)
+    sep_x = TEXT_CX - sep_w / 2
+
+    left_w = text_width(draw, left_text, left_font)
+    left_x = sep_x - gap - left_w
+
+    right_x = sep_x + sep_w + gap
+
+    for txt, font, x in (
+        (left_text, left_font, left_x),
+        (sep_text, sep_font, sep_x),
+        (right_text, right_font, right_x),
+    ):
+        b = draw.textbbox((0, 0), txt, font=font)
+        h = b[3] - b[1]
+        y = cy - max_h / 2 - b[1]
+        draw.text((int(x - b[0]), int(y)), txt, font=font, fill=WHITE)
 
 def fit_text_font(draw, text, start_size, max_w, min_size=18):
     size = start_size
@@ -766,19 +796,35 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
         max_home_w = TEAM_TEXT_MAX_W - text_width(draw, away_full, a_font) - fixed_w
         home_full = ellipsize_to_width(draw, home_full, h_font, max_home_w)
 
-    draw_centered_segments(draw, [
-        (home_full, h_font, WHITE),
-        ('  VS  ', vs_font, WHITE),
-        (away_full, a_font, WHITE)
-    ], TEAM_BLOCK_CY)
+    vs_gap = 14
+    vs_w = text_width(draw, 'VS', vs_font)
+    
+    max_home_w = int(TEXT_CX - RIGHT_BLOCK_LEFT - vs_w / 2 - vs_gap)
+    max_away_w = int(RIGHT_BLOCK_RIGHT - TEXT_CX - vs_w / 2 - vs_gap)
+    
+    home_full = ellipsize_to_width(draw, home_full, h_font, max_home_w)
+    away_full = ellipsize_to_width(draw, away_full, a_font, max_away_w)
+    
+    draw_axis_centered_segments(
+        draw,
+        home_full,
+        h_font,
+        'VS',
+        vs_font,
+        away_full,
+        a_font,
+        TEAM_BLOCK_CY,
+        gap=vs_gap
+    )
 
     paste_logo(home_logo, HOME_LOGO_CX)
     paste_logo(away_logo, AWAY_LOGO_CX)
 
-    sep_time = f' | {kickoff_txt}'
-    time_w = text_width(draw, sep_time, info_font)
-    max_loc_w = max(1, INFO_TEXT_MAX_W - time_w)
-
+    info_gap = 10
+    sep_w = text_width(draw, '|', info_font)
+    
+    max_loc_w = int(TEXT_CX - RIGHT_BLOCK_LEFT - sep_w / 2 - info_gap)
+    
     loc_font, loc_text = fit_text_font(
         draw,
         location_txt,
@@ -786,11 +832,18 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
         max_loc_w,
         min_size=18
     )
-
-    draw_centered_segments(draw, [
-        (loc_text, loc_font, WHITE),
-        (sep_time, info_font, WHITE)
-    ], INFO_Y)
+    
+    draw_axis_centered_segments(
+        draw,
+        loc_text,
+        loc_font,
+        '|',
+        info_font,
+        kickoff_txt,
+        info_font,
+        INFO_Y,
+        gap=info_gap
+    )
 
     if player_photo is not None:
         ph = player_photo.copy()
