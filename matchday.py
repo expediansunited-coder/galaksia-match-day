@@ -11,6 +11,8 @@ from gspread.exceptions import APIError
 from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build
 
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps  # add ImageOps
+
 import json
 import requests
 
@@ -525,7 +527,9 @@ def get_birefnet_model():
 
 
 def remove_bg_birefnet(data):
-    image = Image.open(io.BytesIO(data)).convert("RGB")
+    image = Image.open(io.BytesIO(data))
+    image = ImageOps.exif_transpose(image)
+    image = image.convert("RGB")
     original_size = image.size
 
     model = get_birefnet_model()
