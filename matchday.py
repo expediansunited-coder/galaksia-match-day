@@ -1165,7 +1165,7 @@ def run():
                 continue
 
             recent = []
-            for r in range(i - 2, 0, -1):
+            for r in range(i - 1, 1, -1):
                 prev = data[r - 1]
                 if len(prev) > COL_MD_PICTURE:
                     v = prev[COL_MD_PICTURE].strip()
