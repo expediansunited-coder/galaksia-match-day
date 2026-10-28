@@ -755,67 +755,59 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
     home_full = display_team_for_line(clean_team_name(home))
     away_full = display_team_for_line(clean_team_name(away))
 
-    home_is_us = is_our_team_name(home)
-    away_is_us = is_our_team_name(away)
-
-    gp_font = team_font
     vs_font = team_font
+    vs_gap = 14
 
-    other_size = TEAM_SIZE
-    while other_size > 18:
-        other_font = load_font(other_size)
+    home_size = TEAM_SIZE
+    away_size = TEAM_SIZE
+    min_team_size = 8
 
-        h_font = gp_font if home_is_us else other_font
-        a_font = gp_font if away_is_us else other_font
+    h_font = load_font(home_size)
+    a_font = load_font(away_size)
 
-        segments = [
-            (home_full, h_font, WHITE),
-            ('  VS  ', vs_font, WHITE),
-            (away_full, a_font, WHITE)
-        ]
+    def matchup_total_width():
+        return (
+            text_width(draw, home_full, h_font) +
+            vs_gap +
+            text_width(draw, 'VS', vs_font) +
+            vs_gap +
+            text_width(draw, away_full, a_font)
+        )
 
-        total_w = sum(text_width(draw, txt, font) for txt, font, fill in segments)
+    while matchup_total_width() > TEAM_TEXT_MAX_W and (home_size > min_team_size or away_size > min_team_size):
+        home_w = text_width(draw, home_full, h_font)
+        away_w = text_width(draw, away_full, a_font)
 
-        if total_w <= TEAM_TEXT_MAX_W:
+        if home_w >= away_w and home_size > min_team_size:
+            home_size -= 1
+            h_font = load_font(home_size)
+        elif away_size > min_team_size:
+            away_size -= 1
+            a_font = load_font(away_size)
+        elif home_size > min_team_size:
+            home_size -= 1
+            h_font = load_font(home_size)
+        else:
             break
 
-        other_size -= 1
-
-    other_font = load_font(other_size)
-
-    h_font = gp_font if home_is_us else other_font
-    a_font = gp_font if away_is_us else other_font
-
-    fixed_w = text_width(draw, '  VS  ', vs_font)
-
-    if home_is_us and not away_is_us:
-        max_away_w = TEAM_TEXT_MAX_W - text_width(draw, home_full, h_font) - fixed_w
-        away_full = ellipsize_to_width(draw, away_full, a_font, max_away_w)
-
-    if away_is_us and not home_is_us:
-        max_home_w = TEAM_TEXT_MAX_W - text_width(draw, away_full, a_font) - fixed_w
-        home_full = ellipsize_to_width(draw, home_full, h_font, max_home_w)
-
-    vs_gap = 14
-    vs_w = text_width(draw, 'VS', vs_font)
-    
-    max_home_w = int(TEXT_CX - RIGHT_BLOCK_LEFT - vs_w / 2 - vs_gap)
-    max_away_w = int(RIGHT_BLOCK_RIGHT - TEXT_CX - vs_w / 2 - vs_gap)
-    
-    home_full = ellipsize_to_width(draw, home_full, h_font, max_home_w)
-    away_full = ellipsize_to_width(draw, away_full, a_font, max_away_w)
-    
-    draw_axis_centered_segments(
-        draw,
-        home_full,
-        h_font,
-        'VS',
-        vs_font,
-        away_full,
-        a_font,
-        TEAM_BLOCK_CY,
-        gap=vs_gap
+    total_w = matchup_total_width()
+    max_h = max(
+        text_height(draw, home_full, h_font),
+        text_height(draw, 'VS', vs_font),
+        text_height(draw, away_full, a_font)
     )
+
+    x = TEXT_CX - total_w / 2
+
+    for txt, font, add_gap in (
+        (home_full, h_font, vs_gap),
+        ('VS', vs_font, vs_gap),
+        (away_full, a_font, 0),
+    ):
+        b = draw.textbbox((0, 0), txt, font=font)
+        y = TEAM_BLOCK_CY - max_h / 2 - b[1]
+        draw.text((int(x - b[0]), int(y)), txt, font=font, fill=WHITE)
+        x += (b[2] - b[0]) + add_gap
 
     paste_logo(home_logo, HOME_LOGO_CX)
     paste_logo(away_logo, AWAY_LOGO_CX)
