@@ -205,8 +205,16 @@ def load_font(size):
 def clean_team_name(name):
     s = (name or '').strip()
 
-    s = re.sub(r'["“”„‟]+([A-ZÁ-Ž])["“”„‟]+', r'\1', s)
-    s = re.sub(r'\b(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?\b', '', s, flags=re.I)
+    # "C" -> C, but keep it as a separate team-level token.
+    s = re.sub(r'["“”„‟]\s*([A-ZÁ-ŽA-Za-z])\s*["“”„‟]', r' \1', s)
+
+    # Remove legal suffixes without leaving ", ." garbage behind.
+    s = re.sub(
+        r'\s*,?\s*(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?\s*',
+        ' ',
+        s,
+        flags=re.I
+    )
 
     s = re.sub(r'\s+', ' ', s)
     s = re.sub(r'\s*,\s*$', '', s)
@@ -329,6 +337,100 @@ def fit_text_font(draw, text, start_size, max_w, min_size=18):
     font = load_font(min_size)
     return font, ellipsize_to_width(draw, text, font, max_w)
 
+def best_two_line_split(draw, text, font):
+    words = str(text or '').strip().split()
+
+    if len(words) < 2:
+        return [str(text or '').strip()]
+
+    best = None
+
+    for k in range(1, len(words)):
+        line1 = ' '.join(words[:k])
+        line2 = ' '.join(words[k:])
+
+        w1 = text_width(draw, line1, font)
+        w2 = text_width(draw, line2, font)
+
+        max_w = max(w1, w2)
+        diff = abs(w1 - w2)
+
+        score = (max_w, diff)
+
+        if best is None or score < best[0]:
+            best = (score, [line1, line2])
+
+    return best[1]
+
+
+def fit_text_block(draw, text, start_size, max_w, min_size=8):
+    """
+    Fits text into max two centered lines.
+    First tries one line.
+    Then tries automatic two-line split.
+    Only then reduces font size.
+    Never ellipsizes.
+    """
+    text = str(text or '').strip()
+
+    if not text:
+        return load_font(start_size), ['']
+
+    for size in range(start_size, min_size - 1, -1):
+        font = load_font(size)
+
+        if text_width(draw, text, font) <= max_w:
+            return font, [text]
+
+        lines = best_two_line_split(draw, text, font)
+
+        if len(lines) == 2 and max(text_width(draw, ln, font) for ln in lines) <= max_w:
+            return font, lines
+
+    font = load_font(min_size)
+    lines = best_two_line_split(draw, text, font)
+
+    return font, lines
+
+
+def text_block_size(draw, lines, font, line_gap):
+    widths = []
+    heights = []
+
+    for line in lines:
+        b = draw.textbbox((0, 0), line, font=font)
+        widths.append(b[2] - b[0])
+        heights.append(b[3] - b[1])
+
+    total_w = max(widths) if widths else 0
+    total_h = sum(heights) + line_gap * max(0, len(lines) - 1)
+
+    return total_w, total_h
+
+
+def draw_centered_text_block(draw, lines, font, cx, cy, fill=WHITE, line_gap=6):
+    """
+    Draws one-line or two-line text as one visual block.
+    Each line is centered inside the block.
+    The whole block is centered on cy using actual text bbox height.
+    """
+    bboxes = [draw.textbbox((0, 0), line, font=font) for line in lines]
+    heights = [b[3] - b[1] for b in bboxes]
+
+    total_h = sum(heights) + line_gap * max(0, len(lines) - 1)
+    y_top = cy - total_h / 2
+
+    y = y_top
+
+    for line, b, h in zip(lines, bboxes, heights):
+        w = b[2] - b[0]
+        x = cx - w / 2 - b[0]
+        draw_y = y - b[1]
+
+        draw.text((int(x), int(draw_y)), line, font=font, fill=fill)
+
+        y += h + line_gap
+
 # ============================================================
 # DRIVE
 # ============================================================
@@ -405,47 +507,55 @@ def list_images_in_folder(drive, folder_id):
 # ============================================================
 # IMAGE PROCESSING
 # ============================================================
-def remove_edge_background(img, tol=60):
+def remove_edge_background(img, tol=40):
+    """
+    Remove only the background connected to the image border.
+    Keeps interior white/green parts of logos.
+    This is the same channel-based flood-fill logic that works in the next-game script.
+    """
     img = img.convert('RGBA')
     w, h = img.size
     px = img.load()
 
     corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
-    bg = tuple(sum(c[i] for c in corners) // 4 for i in range(3))
+    br = sum(c[0] for c in corners) // 4
+    bg = sum(c[1] for c in corners) // 4
+    bb = sum(c[2] for c in corners) // 4
 
-    mask = bytearray(w * h)
-    for y in range(h):
-        for x in range(w):
-            c = px[x, y]
-            dist = abs(c[0] - bg[0]) + abs(c[1] - bg[1]) + abs(c[2] - bg[2])
-            mask[y * w + x] = 0 if dist < tol else 1
+    def close(c):
+        return (
+            abs(c[0] - br) <= tol and
+            abs(c[1] - bg) <= tol and
+            abs(c[2] - bb) <= tol
+        )
 
+    visited = bytearray(w * h)
     q = deque()
-    seen = bytearray(w * h)
 
     for x in range(w):
-        for y in (0, h - 1):
-            idx = y * w + x
-            if mask[idx] == 0:
-                q.append((x, y))
-                seen[idx] = 1
+        q.append((x, 0))
+        q.append((x, h - 1))
 
     for y in range(h):
-        for x in (0, w - 1):
-            idx = y * w + x
-            if mask[idx] == 0:
-                q.append((x, y))
-                seen[idx] = 1
+        q.append((0, y))
+        q.append((w - 1, y))
 
     while q:
         x, y = q.popleft()
-        px[x, y] = px[x, y][:3] + (0,)
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < w and 0 <= ny < h:
-                idx = ny * w + nx
-                if not seen[idx] and mask[idx] == 0:
-                    seen[idx] = 1
+        idx = y * w + x
+
+        if visited[idx]:
+            continue
+
+        visited[idx] = 1
+        c = px[x, y]
+
+        if c[3] == 0 or close(c):
+            px[x, y] = (c[0], c[1], c[2], 0)
+
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h and not visited[ny * w + nx]:
                     q.append((nx, ny))
 
     cb = img.getbbox()
@@ -737,7 +847,7 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
             return None
 
         img = Image.open(io.BytesIO(download_file_bytes(drive, lf['id']))).convert('RGBA')
-        img = remove_edge_background(img, tol=60)
+        img = remove_edge_background(img, tol=40)
         cb = img.getbbox()
         return img.crop(cb) if cb else img
 
@@ -758,83 +868,143 @@ def build_matchday_image(team, opp_name, we_are_home, kickoff_txt, location_txt,
     vs_font = team_font
     vs_gap = 14
 
-    home_size = TEAM_SIZE
-    away_size = TEAM_SIZE
-    min_team_size = 8
+    vs_w = text_width(draw, 'VS', vs_font)
+    vs_left = TEXT_CX - vs_w / 2
+    vs_right = TEXT_CX + vs_w / 2
 
-    h_font = load_font(home_size)
-    a_font = load_font(away_size)
+    home_block_left = RIGHT_BLOCK_LEFT
+    home_block_right = int(vs_left - vs_gap)
+    away_block_left = int(vs_right + vs_gap)
+    away_block_right = RIGHT_BLOCK_RIGHT
 
-    def matchup_total_width():
-        return (
-            text_width(draw, home_full, h_font) +
-            vs_gap +
-            text_width(draw, 'VS', vs_font) +
-            vs_gap +
-            text_width(draw, away_full, a_font)
-        )
+    home_block_w = max(20, home_block_right - home_block_left)
+    away_block_w = max(20, away_block_right - away_block_left)
 
-    while matchup_total_width() > TEAM_TEXT_MAX_W and (home_size > min_team_size or away_size > min_team_size):
-        home_w = text_width(draw, home_full, h_font)
-        away_w = text_width(draw, away_full, a_font)
+    home_cx = int((home_block_left + home_block_right) / 2)
+    away_cx = int((away_block_left + away_block_right) / 2)
 
-        if home_w >= away_w and home_size > min_team_size:
-            home_size -= 1
-            h_font = load_font(home_size)
-        elif away_size > min_team_size:
-            away_size -= 1
-            a_font = load_font(away_size)
-        elif home_size > min_team_size:
-            home_size -= 1
-            h_font = load_font(home_size)
-        else:
-            break
-
-    total_w = matchup_total_width()
-    max_h = max(
-        text_height(draw, home_full, h_font),
-        text_height(draw, 'VS', vs_font),
-        text_height(draw, away_full, a_font)
+    home_font, home_lines = fit_text_block(
+        draw,
+        home_full,
+        TEAM_SIZE,
+        home_block_w,
+        min_size=8
     )
 
-    x = TEXT_CX - total_w / 2
+    away_font, away_lines = fit_text_block(
+        draw,
+        away_full,
+        TEAM_SIZE,
+        away_block_w,
+        min_size=8
+    )
 
-    for txt, font, add_gap in (
-        (home_full, h_font, vs_gap),
-        ('VS', vs_font, vs_gap),
-        (away_full, a_font, 0),
-    ):
-        b = draw.textbbox((0, 0), txt, font=font)
-        y = TEAM_BLOCK_CY - max_h / 2 - b[1]
-        draw.text((int(x - b[0]), int(y)), txt, font=font, fill=WHITE)
-        x += (b[2] - b[0]) + add_gap
+    team_line_gap = 6
+
+    home_w, home_h = text_block_size(draw, home_lines, home_font, team_line_gap)
+    away_w, away_h = text_block_size(draw, away_lines, away_font, team_line_gap)
+    vs_h = text_height(draw, 'VS', vs_font)
+
+    tallest_h = max(home_h, away_h, vs_h)
+
+    draw_centered_text_block(
+        draw,
+        home_lines,
+        home_font,
+        home_cx,
+        TEAM_BLOCK_CY,
+        fill=WHITE,
+        line_gap=team_line_gap
+    )
+
+    draw_centered_text_block(
+        draw,
+        ['VS'],
+        vs_font,
+        TEXT_CX,
+        TEAM_BLOCK_CY,
+        fill=WHITE,
+        line_gap=team_line_gap
+    )
+
+    draw_centered_text_block(
+        draw,
+        away_lines,
+        away_font,
+        away_cx,
+        TEAM_BLOCK_CY,
+        fill=WHITE,
+        line_gap=team_line_gap
+    )
 
     paste_logo(home_logo, HOME_LOGO_CX)
     paste_logo(away_logo, AWAY_LOGO_CX)
 
     info_gap = 10
-    sep_w = text_width(draw, '|', info_font)
-    
-    max_loc_w = int(TEXT_CX - RIGHT_BLOCK_LEFT - sep_w / 2 - info_gap)
-    
-    loc_font, loc_text = fit_text_font(
+    sep_font = info_font
+    time_font = info_font
+
+    sep_w = text_width(draw, '|', sep_font)
+    sep_left = TEXT_CX - sep_w / 2
+    sep_right = TEXT_CX + sep_w / 2
+
+    loc_block_left = RIGHT_BLOCK_LEFT
+    loc_block_right = int(sep_left - info_gap)
+    time_block_left = int(sep_right + info_gap)
+    time_block_right = RIGHT_BLOCK_RIGHT
+
+    loc_block_w = max(20, loc_block_right - loc_block_left)
+    time_block_w = max(20, time_block_right - time_block_left)
+
+    loc_cx = int((loc_block_left + loc_block_right) / 2)
+    time_cx = int((time_block_left + time_block_right) / 2)
+
+    loc_font, loc_lines = fit_text_block(
         draw,
         location_txt,
         INFO_SIZE,
-        max_loc_w,
-        min_size=18
+        loc_block_w,
+        min_size=8
     )
-    
-    draw_axis_centered_segments(
+
+    time_font, time_lines = fit_text_block(
         draw,
-        loc_text,
-        loc_font,
-        '|',
-        info_font,
         kickoff_txt,
-        info_font,
+        INFO_SIZE,
+        time_block_w,
+        min_size=8
+    )
+
+    info_line_gap = 5
+
+    draw_centered_text_block(
+        draw,
+        loc_lines,
+        loc_font,
+        loc_cx,
         INFO_Y,
-        gap=info_gap
+        fill=WHITE,
+        line_gap=info_line_gap
+    )
+
+    draw_centered_text_block(
+        draw,
+        ['|'],
+        sep_font,
+        TEXT_CX,
+        INFO_Y,
+        fill=WHITE,
+        line_gap=info_line_gap
+    )
+
+    draw_centered_text_block(
+        draw,
+        time_lines,
+        time_font,
+        time_cx,
+        INFO_Y,
+        fill=WHITE,
+        line_gap=info_line_gap
     )
 
     if player_photo is not None:
