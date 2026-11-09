@@ -208,9 +208,9 @@ def clean_team_name(name):
     # "C" -> C, but keep it as a separate team-level token.
     s = re.sub(r'["“”„‟]\s*([A-ZÁ-ŽA-Za-z])\s*["“”„‟]', r' \1', s)
 
-    # Remove legal suffixes only as actual suffix tokens.
+    # Remove legal suffixes only when they are separate tokens.
     s = re.sub(
-        r'\s*,?\s*(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?(?=\s|$)',
+        r'(?:^|[\s,]+)(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?(?=\s|$)',
         ' ',
         s,
         flags=re.I
