@@ -208,9 +208,9 @@ def clean_team_name(name):
     # "C" -> C, but keep it as a separate team-level token.
     s = re.sub(r'["“”„‟]\s*([A-ZÁ-ŽA-Za-z])\s*["“”„‟]', r' \1', s)
 
-    # Remove legal suffixes without leaving ", ." garbage behind.
+    # Remove legal suffixes only as actual suffix tokens.
     s = re.sub(
-        r'\s*,?\s*(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?\s*',
+        r'\s*,?\s*(z\s*\.?\s*s|s\s*\.?\s*r\s*\.?\s*o|a\s*\.?\s*s|o\s*\.?\s*s)\.?(?=\s|$)',
         ' ',
         s,
         flags=re.I
@@ -464,21 +464,78 @@ def download_image_by_name(drive, name, folder_id=ASSETS_FOLDER_ID):
     return None
 
 
-def find_logo_file(files, name):
-    target = _norm(os.path.splitext(name)[0])
+def find_by_basename(files, name):
+    target = _norm(name)
+
     for f in files:
-        if _norm(os.path.splitext(f['name'])[0]) == target:
+        base = os.path.splitext(f['name'])[0]
+        if _norm(base) == target:
             return f
 
-    tset = set(_tokens(name))
-    best = None
-    for f in files:
-        lset = set(_tokens(os.path.splitext(f['name'])[0]))
-        if tset and (tset <= lset or lset <= tset):
+    return None
+
+
+def find_logo_file(files, name):
+    """
+    Fuzzy logo match based on the working next-game script:
+    1. exact basename match
+    2. strong token match
+    3. retry after stripping trailing team-level token A/B/C/D/VET/VETS
+    """
+    def try_match(search_name):
+        target = _norm(search_name)
+
+        if not target:
+            return None
+
+        f = find_by_basename(files, search_name)
+        if f:
             return f
-        if tset & lset:
-            best = f
-    return best
+
+        tset = set(_tokens(search_name))
+
+        if not tset:
+            return None
+
+        best = None
+        best_score = 0
+
+        for lf in files:
+            base = os.path.splitext(lf['name'])[0]
+            lset = set(_tokens(base))
+
+            if not lset:
+                continue
+
+            if tset == lset:
+                return lf
+
+            if len(tset) >= 2 and len(lset) >= 2 and (tset <= lset or lset <= tset):
+                return lf
+
+            overlap = len(tset & lset)
+
+            if overlap >= 2 and overlap > best_score:
+                best = lf
+                best_score = overlap
+
+        return best
+
+    f = try_match(name)
+
+    if f:
+        return f
+
+    toks = _tokens(name)
+
+    if toks and toks[-1] in ('a', 'b', 'c', 'd', 'vet', 'vets'):
+        stripped = ' '.join(toks[:-1])
+        f = try_match(stripped)
+
+        if f:
+            return f
+
+    return None
 
 
 def list_subfolders(drive, parent_id):
